@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Neon 80s Shmup</title>
+  <style>
+    :root {
+      --bg0: #060010;
+      --bg1: #100022;
+      --neon-cyan: #23f0ff;
+      --neon-pink: #ff2bd6;
+      --neon-purple: #8f5bff;
+      --neon-green: #79ff4d;
+      --panel: rgba(11, 5, 27, 0.7);
+      --text: #e9faff;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: radial-gradient(circle at 50% 20%, #1a0d35 0%, var(--bg0) 48%, #030008 100%);
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+    }
+    .wrap {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    .hud {
+      width: min(900px, 96vw);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-shadow: 0 0 8px rgba(35, 240, 255, 0.45);
+    }
+    .badge {
+      background: var(--panel);
+      border: 1px solid rgba(35, 240, 255, 0.35);
+      box-shadow: 0 0 18px rgba(35, 240, 255, 0.25), inset 0 0 14px rgba(143, 91, 255, 0.15);
+      border-radius: 10px;
+      padding: 8px 12px;
+    }
+    canvas {
+      width: min(900px, 96vw);
+      aspect-ratio: 16 / 9;
+      border: 1px solid rgba(255, 43, 214, 0.55);
+      box-shadow:
+        0 0 22px rgba(255, 43, 214, 0.35),
+        0 0 45px rgba(35, 240, 255, 0.2),
+        inset 0 0 30px rgba(143, 91, 255, 0.14);
+      border-radius: 14px;
+      background: linear-gradient(180deg, var(--bg1), #070013 80%);
+      image-rendering: pixelated;
+    }
+    .help {
+      margin-top: 10px;
+      opacity: 0.9;
+      font-size: 13px;
+      text-align: center;
+      color: #ccf8ff;
+      text-shadow: 0 0 10px rgba(35,240,255,.45);
+    }
+    .accent { color: var(--neon-pink); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hud">
+      <div class="badge">🕹️ Neon 80s Shmup</div>
+      <div class="badge">Score: <span id="score">0</span></div>
+      <div class="badge">Lives: <span id="lives">3</span></div>
+    </div>
+    <canvas id="game" width="960" height="540"></canvas>
+    <div class="help">Move: <span class="accent">← →</span> or <span class="accent">A D</span> · Shoot: <span class="accent">Space</span> · Restart after game over: <span class="accent">R</span></div>
+  </div>
+
+  <script>
+    const cvs = document.getElementById('game');
+    const ctx = cvs.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+
+    const state = {
+      running: true,
+      score: 0,
+      lives: 3,
+      t: 0,
+      keys: {},
+      stars: [],
+      bullets: [],
+      enemies: [],
+      particles: [],
+      enemyTimer: 0,
+      player: { x: cvs.width / 2, y: cvs.height - 56, w: 42, h: 24, speed: 6, cooldown: 0 }
+    };
+
+    for (let i = 0; i < 130; i++) {
+      state.stars.push({ x: Math.random() * cvs.width, y: Math.random() * cvs.height, s: 1 + Math.random() * 2.3, v: 0.3 + Math.random() * 1.5 });
+    }
+
+    window.addEventListener('keydown', e => {
+      state.keys[e.key.toLowerCase()] = true;
+      if (e.key === ' ') e.preventDefault();
+      if (!state.running && e.key.toLowerCase() === 'r') reset();
+    });
+    window.addEventListener('keyup', e => state.keys[e.key.toLowerCase()] = false);
+
+    function reset() {
+      state.running = true;
+      state.score = 0;
+      state.lives = 3;
+      state.bullets.length = 0;
+      state.enemies.length = 0;
+      state.particles.length = 0;
+      state.enemyTimer = 0;
+      state.player.x = cvs.width / 2;
+      state.player.cooldown = 0;
+      scoreEl.textContent = '0';
+      livesEl.textContent = '3';
+    }
+
+    function spawnEnemy() {
+      const size = 18 + Math.random() * 20;
+      state.enemies.push({
+        x: 22 + Math.random() * (cvs.width - 44),
+        y: -32,
+        w: size,
+        h: size,
+        vy: 1.4 + Math.random() * 2.2,
+        vx: (Math.random() - 0.5) * 1.2,
+        hp: 1 + (Math.random() > 0.88 ? 1 : 0)
+      });
+    }
+
+    function explode(x, y, color = '#ff2bd6', count = 16) {
+      for (let i = 0; i < count; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 1 + Math.random() * 4;
+        state.particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 30 + Math.random() * 20, color });
+      }
+    }
+
+    function rectHit(a, b) {
+      return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    function update() {
+      state.t++;
+      const p = state.player;
+      if (state.running) {
+        if (state.keys['arrowleft'] || state.keys['a']) p.x -= p.speed;
+        if (state.keys['arrowright'] || state.keys['d']) p.x += p.speed;
+        p.x = Math.max(20, Math.min(cvs.width - 20, p.x));
+
+        if (p.cooldown > 0) p.cooldown--;
+        if ((state.keys[' '] || state.keys['space']) && p.cooldown <= 0) {
+          state.bullets.push({ x: p.x - 2, y: p.y - 20, w: 4, h: 14, vy: -9 });
+          p.cooldown = 8;
+        }
+
+        state.enemyTimer--;
+        if (state.enemyTimer <= 0) {
+          spawnEnemy();
+          state.enemyTimer = Math.max(14, 48 - Math.floor(state.score / 50));
+        }
+      }
+
+      for (const s of state.stars) {
+        s.y += s.v;
+        if (s.y > cvs.height) { s.y = -2; s.x = Math.random() * cvs.width; }
+      }
+
+      for (const b of state.bullets) b.y += b.vy;
+      state.bullets = state.bullets.filter(b => b.y > -30);
+
+      for (const e of state.enemies) {
+        e.y += e.vy;
+        e.x += e.vx;
+        if (e.x < 10 || e.x + e.w > cvs.width - 10) e.vx *= -1;
+      }
+
+      if (state.running) {
+        for (let bi = state.bullets.length - 1; bi >= 0; bi--) {
+          const b = state.bullets[bi];
+          for (let ei = state.enemies.length - 1; ei >= 0; ei--) {
+            const e = state.enemies[ei];
+            if (rectHit(b, e)) {
+              state.bullets.splice(bi, 1);
+              e.hp -= 1;
+              explode(b.x, b.y, '#23f0ff', 8);
+              if (e.hp <= 0) {
+                explode(e.x + e.w / 2, e.y + e.h / 2, '#ff2bd6', 22);
+                state.enemies.splice(ei, 1);
+                state.score += 10;
+                scoreEl.textContent = String(state.score);
+              }
+              break;
+            }
+          }
+        }
+
+        for (let ei = state.enemies.length - 1; ei >= 0; ei--) {
+          const e = state.enemies[ei];
+          if (e.y > cvs.height + 20) {
+            state.enemies.splice(ei, 1);
+            state.lives -= 1;
+            livesEl.textContent = String(state.lives);
+            if (state.lives <= 0) state.running = false;
+            continue;
+          }
+
+          const ship = { x: p.x - p.w / 2, y: p.y - p.h / 2, w: p.w, h: p.h };
+          if (rectHit(e, ship)) {
+            explode(p.x, p.y, '#79ff4d', 30);
+            state.enemies.splice(ei, 1);
+            state.lives -= 1;
+            livesEl.textContent = String(state.lives);
+            if (state.lives <= 0) state.running = false;
+          }
+        }
+      }
+
+      for (const px of state.particles) {
+        px.x += px.vx;
+        px.y += px.vy;
+        px.vx *= 0.98;
+        px.vy *= 0.98;
+        px.life--;
+      }
+      state.particles = state.particles.filter(p => p.life > 0);
+    }
+
+    function drawShip(x, y) {
+      ctx.save();
+      ctx.translate(x, y);
+      const pulse = 0.75 + Math.sin(state.t * 0.2) * 0.25;
+      ctx.shadowBlur = 25;
+      ctx.shadowColor = 'rgba(35,240,255,.9)';
+      ctx.fillStyle = 'rgba(35,240,255,.9)';
+      ctx.beginPath();
+      ctx.moveTo(0, -18);
+      ctx.lineTo(16, 15);
+      ctx.lineTo(0, 8);
+      ctx.lineTo(-16, 15);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = `rgba(255,43,214,${0.6 + pulse * 0.3})`;
+      ctx.fillRect(-3, -2, 6, 16);
+      ctx.restore();
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+      const g = ctx.createLinearGradient(0, 0, 0, cvs.height);
+      g.addColorStop(0, '#13082d');
+      g.addColorStop(1, '#070012');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, cvs.width, cvs.height);
+
+      for (const s of state.stars) {
+        ctx.fillStyle = `rgba(35,240,255,${0.25 + s.s * 0.15})`;
+        ctx.fillRect(s.x, s.y, s.s, s.s);
+      }
+
+      drawShip(state.player.x, state.player.y);
+
+      ctx.shadowBlur = 16;
+      ctx.shadowColor = '#23f0ff';
+      ctx.fillStyle = '#23f0ff';
+      for (const b of state.bullets) ctx.fillRect(b.x, b.y, b.w, b.h);
+
+      for (const e of state.enemies) {
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = '#ff2bd6';
+        ctx.fillStyle = '#ff2bd6';
+        ctx.fillRect(e.x, e.y, e.w, e.h);
+        ctx.fillStyle = '#8f5bff';
+        ctx.fillRect(e.x + 2, e.y + 2, e.w - 4, 5);
+      }
+
+      ctx.shadowBlur = 0;
+      for (const p of state.particles) {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, p.life / 50);
+        ctx.fillRect(p.x, p.y, 2.5, 2.5);
+      }
+      ctx.globalAlpha = 1;
+
+      if (!state.running) {
+        ctx.fillStyle = 'rgba(4,0,9,.7)';
+        ctx.fillRect(0, 0, cvs.width, cvs.height);
+        ctx.textAlign = 'center';
+        ctx.shadowBlur = 24;
+        ctx.shadowColor = '#ff2bd6';
+        ctx.fillStyle = '#ff2bd6';
+        ctx.font = 'bold 56px Segoe UI';
+        ctx.fillText('GAME OVER', cvs.width / 2, cvs.height / 2 - 14);
+        ctx.shadowColor = '#23f0ff';
+        ctx.fillStyle = '#23f0ff';
+        ctx.font = 'bold 24px Segoe UI';
+        ctx.fillText('Press R to restart', cvs.width / 2, cvs.height / 2 + 34);
+      }
+    }
+
+    function loop() {
+      update();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+</html>
